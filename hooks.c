@@ -23,7 +23,7 @@ static void SetTag(void);
 
 void __cdecl My_Cmd_AddCommand(char* cmd, void* func) {
     if (!common_initialized) InitializeStatic();
-    
+
     Cmd_AddCommand(cmd, func);
 }
 
@@ -48,7 +48,7 @@ void __cdecl My_Sys_SetModuleOffset(char* moduleName, void* offset) {
     }
     else
         DebugPrint("Unknown module: %s\n", moduleName);
-    
+
     Sys_SetModuleOffset(moduleName, offset);
     if (common_initialized) {
     	SearchVmFunctions();
@@ -57,18 +57,84 @@ void __cdecl My_Sys_SetModuleOffset(char* moduleName, void* offset) {
     }
 }
 
+
+typedef void (__cdecl *race_point_touch_ptr)(gentity_t *a1, gentity_t *a2);
+race_point_touch_ptr race_point_touch;
+
+// typedef gentity_t* (__cdecl *G_PickTarget_ptr)(char *str);
+// G_PickTarget_ptr G_PickTarget;
+
+void __cdecl My_race_point_touch( gentity_t *ent, gentity_t *activator ) {
+	if (activator->client) {
+		if ( ent->spawnflags && activator->client->race.startTime && !ent->targetname )
+			return;  //no more tr
+	}
+
+	race_point_touch(ent, activator);
+}
+
+void __cdecl My_target_init_touch( gentity_t *ent, gentity_t *activator ) {
+	if (activator->client) {
+		//KEEPARMOR
+		if ( !(ent->spawnflags & 1) )
+			activator->client->ps.stats[STAT_ARMOR] = 0;
+
+		//KEEPHEALTH
+		if ( !(ent->spawnflags & 2) )
+			activator->health = 100;
+
+		//KEEPWEAPONS
+		if ( !(ent->spawnflags & 4) ) {
+			activator->client->ps.stats[STAT_WEAPONS] = 2<<(WP_MACHINEGUN-1);
+			memset( activator->client->ps.ammo, 0, sizeof( activator->client->ps.ammo ) );
+			activator->client->ps.ammo[WP_MACHINEGUN] = 100;
+			activator->client->ps.weapon = WP_MACHINEGUN;
+		}
+
+		//KEEPPOWERUPS
+		if ( !(ent->spawnflags & 8) )
+			memset( activator->client->ps.powerups, 0, sizeof( activator->client->ps.powerups ) );
+
+		//KEEPHOLDABLE
+		if ( !(ent->spawnflags & 16) )
+			activator->client->ps.stats[STAT_HOLDABLE_ITEM] = 0;
+
+		//REMOVEMACHINEGUN
+		if ( ent->spawnflags & 32 && activator->client->ps.stats[STAT_WEAPONS] & (2<<(WP_MACHINEGUN-1))  )
+			activator->client->ps.stats[STAT_WEAPONS] -= 2<<(WP_MACHINEGUN-1);
+	}
+}
+
 void __cdecl My_G_InitGame(int levelTime, int randomSeed, int restart) {
     G_InitGame(levelTime, randomSeed, restart);
 
-    if (!cvars_initialized) { // Only called once.
+    if (!cvars_initialized) {  // Only called once.
         SetTag();
     }
     InitializeCvars();
+
 
 #ifndef NOPY
     if (restart)
 	   NewGameDispatcher(restart);
 #endif
+
+	race_point_touch = (race_point_touch_ptr)qagame_dllentry + 0xEE60;
+	// G_PickTarget = (G_PickTarget_ptr)qagame_dllentry + 0x18930;
+
+	gentity_t *z1;
+	int	j1;
+	for ( j1=1, z1=g_entities+j1 ; j1 < level->num_entities ; j1++,z1++ ) {
+		if (z1->inuse && z1->classname) {
+			if ( !strncmp(z1->classname, "trigger_multiple", 16) && z1->message) {
+				if ( !strncmp(z1->message, "race_point", 10) && (z1->target || z1->targetname)) {
+					z1->touch = My_race_point_touch;
+				} else if ( !strncmp(z1->message, "target_init", 11) ) {
+					z1->touch = My_target_init_touch;
+				}
+			}
+		}
+	}
 }
 
 // USED FOR PYTHON
@@ -181,7 +247,7 @@ char* __cdecl My_ClientConnect(int clientNum, qboolean firstTime, qboolean isBot
 
 void __cdecl My_ClientSpawn(gentity_t* ent) {
     ClientSpawn(ent);
-    
+
     // Since we won't ever stop the real function from being called,
     // we trigger the event after calling the real one. This will allow
     // us to set weapons and such without it getting overriden later.
@@ -286,11 +352,11 @@ void HookStatic(void) {
 	}
 }
 
-/* 
+/*
  * Hooks VM calls. Not all use Hook, since the VM calls are stored in a table of
  * pointers. We simply set our function pointer to the current pointer in the table and
  * then replace the it with our replacement function. Just like hooking a VMT.
- * 
+ *
  * This must be called AFTER Sys_SetModuleOffset, since Sys_SetModuleOffset is called after
  * the VM DLL has been loaded, meaning the pointer we use has been set.
  *
