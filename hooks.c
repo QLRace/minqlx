@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <dlfcn.h>
+#include <sys/mman.h>
 
 #include "patterns.h"
 #include "common.h"
@@ -14,6 +15,8 @@
 #ifndef NOPY
 #include "pyminqlx.h"
 #endif
+
+unsigned char str_125[] = "125";
 
 // qagame module.
 void* qagame;
@@ -54,6 +57,10 @@ void __cdecl My_Sys_SetModuleOffset(char* moduleName, void* offset) {
     	SearchVmFunctions();
     	HookVm();
     	InitializeVm();
+
+		int page_size = sysconf(_SC_PAGESIZE);
+		mprotect((void*)((uint64_t)(offset + 0x254878) & ~(page_size-1)), page_size, PROT_READ | PROT_WRITE);
+		*(int64_t*)(offset + 0x254878) = (int64_t*)str_125;
     }
 }
 
@@ -70,8 +77,22 @@ void __cdecl My_race_point_touch( gentity_t *ent, gentity_t *activator ) {
 			return;  //no more tr
 	}
 
+	activator->client->pers.teamState.flagruntime = level->time - activator->client->race.startTime;
 	race_point_touch(ent, activator);
 }
+
+
+void __cdecl My_race_point_touch_old( gentity_t *ent, gentity_t *activator ) {
+	if (activator->client) {
+		if (ent->message)
+			if ( !strncmp(ent->message, "notr", 4) && activator->client->race.startTime && !ent->targetname )
+				return;  //no more tr
+	}
+
+	activator->client->pers.teamState.flagruntime = level->time - activator->client->race.startTime;
+	race_point_touch(ent, activator);
+}
+
 
 void __cdecl My_target_init_touch( gentity_t *ent, gentity_t *activator ) {
 	if (activator->client) {
@@ -133,6 +154,11 @@ void __cdecl My_G_InitGame(int levelTime, int randomSeed, int restart) {
 					z1->touch = My_target_init_touch;
 				}
 			}
+
+			if ( !strncmp(z1->classname, "race_point", 10)) {
+				z1->touch = My_race_point_touch_old;
+			}
+
 		}
 	}
 }
